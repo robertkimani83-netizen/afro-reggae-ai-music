@@ -50,9 +50,6 @@ on:
 
 jobs:
   generate:
-    # Heavy AI generation needs a self-hosted GPU runner.
-    # If you do not have one configured yet, the job will wait rather than
-    # wasting a paid cloud API. Add a runner with labels: self-hosted, linux, gpu.
     runs-on: [self-hosted, linux, gpu]
     timeout-minutes: 180
     permissions:
@@ -68,6 +65,8 @@ jobs:
       SONG_DURATION_MIN: ${{ inputs.duration }}
       YOUTUBE_UPLOAD: ${{ inputs.upload_youtube }}
       YOUTUBE_PRIVACY: ${{ inputs.youtube_privacy }}
+      ACESTEP_URL: http://127.0.0.1:8001
+      ACESTEP_OFFLOAD_TO_CPU: 'true'
 
     steps:
       - name: Checkout
@@ -79,19 +78,52 @@ jobs:
           ffmpeg -version | head -n 1
           nvidia-smi
 
+      - name: Install uv
+        run: |
+          if ! command -v uv >/dev/null 2>&1; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+          fi
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          uv --version
+
+      - name: Install ACE-Step 1.5
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          rm -rf vendor/ACE-Step-1.5
+          git clone --depth 1 https://github.com/ACE-Step/ACE-Step-1.5.git vendor/ACE-Step-1.5
+          cd vendor/ACE-Step-1.5
+          uv sync
+
+      - name: Start local ACE-Step API
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          cd vendor/ACE-Step-1.5
+          nohup uv run acestep-api --host 127.0.0.1 --port 8001 --init_service true --config_path acestep-v15-turbo --init_llm true --lm_model_path acestep-5Hz-lm-0.6B --download-source huggingface > "$GITHUB_WORKSPACE/acestep.log" 2>&1 &
+          for i in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:8001/health >/dev/null 2>&1; then
+              echo 'ACE-Step API is ready.'
+              exit 0
+            fi
+            sleep 5
+          done
+          cat "$GITHUB_WORKSPACE/acestep.log"
+          exit 1
+
       - name: Create Python environment
         run: |
           python3 -m venv .venv
           . .venv/bin/activate
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install -r requirements-vision.txt
 
       - name: Generate lyrics and metadata
         run: |
           . .venv/bin/activate
           python scripts/generate_metadata.py
 
-      - name: Generate music with MusicGen
+      - name: Generate full song with vocals
         run: |
           . .venv/bin/activate
           python scripts/generate_music.py
