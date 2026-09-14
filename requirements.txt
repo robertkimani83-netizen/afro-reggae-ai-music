@@ -1,6 +1,7 @@
 Pillow
 numpy
 requests
+gradio_client
 google-api-python-client
 google-auth-oauthlib
 google-auth
