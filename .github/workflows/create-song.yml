@@ -24,12 +24,12 @@ on:
         default: 'English + Swahili'
         type: string
       video_style:
-        description: 'AI video visual style'
+        description: 'Music-video visual style'
         required: true
         default: 'African tropical island, cinematic, romantic, realistic'
         type: string
       duration:
-        description: 'Target duration in minutes (Suno-compatible generation determines final song length)'
+        description: 'Target duration in minutes'
         required: true
         default: '2'
         type: string
@@ -50,8 +50,8 @@ on:
 
 jobs:
   generate:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 240
     permissions:
       contents: read
       actions: read
@@ -65,52 +65,74 @@ jobs:
       SONG_DURATION_MIN: ${{ inputs.duration }}
       YOUTUBE_UPLOAD: ${{ inputs.upload_youtube }}
       YOUTUBE_PRIVACY: ${{ inputs.youtube_privacy }}
-      MUSICAPI_KEY: ${{ secrets.MUSICAPI_KEY }}
-      MUSICAPI_MODEL: sonic-v6
-      MUSICAPI_TIMEOUT_SECONDS: '900'
+      ACESTEP_BASE_URL: http://127.0.0.1:8001
+      ACESTEP_MAX_SECONDS: '120'
+      ACESTEP_TIMEOUT_SECONDS: '7200'
+      CUDA_VISIBLE_DEVICES: '-1'
+      HF_HUB_DISABLE_TELEMETRY: '1'
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Install system tools
+      - name: Install FFmpeg
+        shell: powershell
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-          python3 --version
-          ffmpeg -version | head -n 1
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
+            winget install --id Gyan.FFmpeg.Shared --accept-source-agreements --accept-package-agreements --silent
+          }
+          ffmpeg -version | Select-Object -First 1
+
+      - name: Prepare local ACE-Step
+        shell: powershell
+        run: .\scripts\setup_local_acestep.ps1
+
+      - name: Start local ACE-Step API
+        shell: powershell
+        run: |
+          $env:CUDA_VISIBLE_DEVICES='-1'
+          $env:ACESTEP_LM_BACKEND='pt'
+          $env:ACESTEP_INIT_LLM='true'
+          $env:PYTHONUNBUFFERED='1'
+          $ace = Join-Path $env:USERPROFILE 'ACE-Step-1.5'
+          Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command',"Set-Location '$ace'; `$env:CUDA_VISIBLE_DEVICES='-1'; `$env:ACESTEP_LM_BACKEND='pt'; `$env:ACESTEP_INIT_LLM='true'; uv run acestep-api --host 127.0.0.1 --port 8001 --lm_backend pt" -WindowStyle Hidden
+          $ready = $false
+          for ($i=0; $i -lt 120; $i++) {
+            try {
+              $r = Invoke-WebRequest -Uri 'http://127.0.0.1:8001/health' -UseBasicParsing -TimeoutSec 5
+              if ($r.StatusCode -eq 200) { $ready = $true; break }
+            } catch {}
+            Start-Sleep -Seconds 5
+          }
+          if (-not $ready) { throw 'Local ACE-Step API did not become ready.' }
+          Write-Host 'Local ACE-Step API is ready.'
 
       - name: Create Python environment
+        shell: powershell
         run: |
-          python3 -m venv .venv
-          . .venv/bin/activate
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          py -3.11 -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\pip.exe install -r requirements.txt
 
       - name: Generate lyrics and metadata
-        run: |
-          . .venv/bin/activate
-          python scripts/generate_metadata.py
+        shell: powershell
+        run: .\.venv\Scripts\python.exe scripts\generate_metadata.py
 
-      - name: Generate full sung song with Suno-compatible MusicAPI
-        run: |
-          . .venv/bin/activate
-          python scripts/generate_music.py
+      - name: Generate full song locally with ACE-Step
+        shell: powershell
+        run: .\.venv\Scripts\python.exe scripts\generate_music.py
 
       - name: Generate music-video scenes
-        run: |
-          . .venv/bin/activate
-          python scripts/generate_scenes.py
+        shell: powershell
+        run: .\.venv\Scripts\python.exe scripts\generate_scenes.py
 
       - name: Assemble music video
-        run: |
-          . .venv/bin/activate
-          python scripts/assemble_video.py
+        shell: powershell
+        run: .\.venv\Scripts\python.exe scripts\assemble_video.py
 
       - name: Generate thumbnail
-        run: |
-          . .venv/bin/activate
-          python scripts/generate_thumbnail.py
+        shell: powershell
+        run: .\.venv\Scripts\python.exe scripts\generate_thumbnail.py
 
       - name: Upload to YouTube
         if: ${{ inputs.upload_youtube }}
@@ -118,9 +140,8 @@ jobs:
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
-        run: |
-          . .venv/bin/activate
-          python scripts/upload_youtube.py
+        shell: powershell
+        run: .\.venv\Scripts\python.exe scripts\upload_youtube.py
 
       - name: Publish generated files as artifact
         uses: actions/upload-artifact@v4
