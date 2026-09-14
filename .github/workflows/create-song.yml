@@ -1,0 +1,130 @@
+name: Create Afro-Reggae Song
+
+on:
+  workflow_dispatch:
+    inputs:
+      song_title:
+        description: 'Song title'
+        required: true
+        default: 'Sweet Island Loving'
+        type: string
+      theme:
+        description: 'Song theme/story'
+        required: true
+        default: 'Romantic island love under the African sunset'
+        type: string
+      mood:
+        description: 'Mood'
+        required: true
+        default: 'Romantic, warm, uplifting'
+        type: string
+      language:
+        description: 'Language'
+        required: true
+        default: 'English + Swahili'
+        type: string
+      video_style:
+        description: 'AI video visual style'
+        required: true
+        default: 'African tropical island, cinematic, romantic, realistic'
+        type: string
+      duration:
+        description: 'Target duration in minutes'
+        required: true
+        default: '3'
+        type: string
+      upload_youtube:
+        description: 'Upload to YouTube after generation'
+        required: true
+        default: false
+        type: boolean
+      youtube_privacy:
+        description: 'YouTube visibility'
+        required: true
+        default: 'private'
+        type: choice
+        options:
+          - private
+          - unlisted
+          - public
+
+jobs:
+  generate:
+    # Heavy AI generation needs a self-hosted GPU runner.
+    # If you do not have one configured yet, the job will wait rather than
+    # wasting a paid cloud API. Add a runner with labels: self-hosted, linux, gpu.
+    runs-on: [self-hosted, linux, gpu]
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      actions: read
+
+    env:
+      SONG_TITLE: ${{ inputs.song_title }}
+      SONG_THEME: ${{ inputs.theme }}
+      SONG_MOOD: ${{ inputs.mood }}
+      SONG_LANGUAGE: ${{ inputs.language }}
+      VIDEO_STYLE: ${{ inputs.video_style }}
+      SONG_DURATION_MIN: ${{ inputs.duration }}
+      YOUTUBE_UPLOAD: ${{ inputs.upload_youtube }}
+      YOUTUBE_PRIVACY: ${{ inputs.youtube_privacy }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check tools
+        run: |
+          python3 --version
+          ffmpeg -version | head -n 1
+          nvidia-smi
+
+      - name: Create Python environment
+        run: |
+          python3 -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Generate lyrics and metadata
+        run: |
+          . .venv/bin/activate
+          python scripts/generate_metadata.py
+
+      - name: Generate music with MusicGen
+        run: |
+          . .venv/bin/activate
+          python scripts/generate_music.py
+
+      - name: Generate AI visual scenes
+        run: |
+          . .venv/bin/activate
+          python scripts/generate_scenes.py
+
+      - name: Assemble music video
+        run: |
+          . .venv/bin/activate
+          python scripts/assemble_video.py
+
+      - name: Generate thumbnail
+        run: |
+          . .venv/bin/activate
+          python scripts/generate_thumbnail.py
+
+      - name: Upload to YouTube
+        if: ${{ inputs.upload_youtube }}
+        env:
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: |
+          . .venv/bin/activate
+          python scripts/upload_youtube.py
+
+      - name: Publish generated files as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: afro-reggae-${{ inputs.song_title }}
+          path: output/
+          if-no-files-found: error
+          retention-days: 7
