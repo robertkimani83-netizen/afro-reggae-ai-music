@@ -1,43 +1,46 @@
 # Afro-Reggae AI Music
 
-A separate, free-first pipeline for creating Afro-Reggae songs, AI-generated visual scenes, thumbnails, and YouTube-ready videos.
+A completely separate, free-first pipeline for creating Afro-Reggae songs with vocals, AI visual scenes, thumbnails, and YouTube-ready videos.
 
 ## Important
 
 This project is intentionally separate from `next-scene-news`.
 
-The pipeline uses open-source software and does not require paid AI APIs. Heavy AI generation is designed for a **self-hosted runner with a suitable GPU**; GitHub-hosted runners are used only for lightweight automation unless you change the workflow.
+There are **no paid AI APIs** in this project. AI models run locally on a self-hosted GPU runner.
 
 ## Pipeline
 
-1. Enter song title/theme/genre/mood/language.
+1. Enter song title, theme, mood, language, visual style and duration.
 2. Generate original lyrics and metadata locally.
-3. Generate music with MusicGen/AudioCraft locally.
-4. Generate AI visual scenes with Stable Diffusion/SDXL locally.
-5. Assemble the scenes and music with FFmpeg.
+3. Generate a complete vocal song with **ACE-Step 1.5** locally.
+4. Generate six AI visual scenes with SDXL locally.
+5. Animate the scenes with a slow camera/zoom effect and combine them with the song using FFmpeg.
 6. Generate a 1280x720 thumbnail locally.
-7. Optionally upload the finished video to YouTube.
-8. Save the final files as GitHub Actions artifacts.
+7. Optionally upload the finished MP4 and thumbnail to YouTube.
+8. Save the generated files as a GitHub Actions artifact.
 
-GitHub Actions supports manually triggered workflows with inputs through `workflow_dispatch`. See the official GitHub documentation: https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow
+GitHub Actions supports manually triggered workflows with input fields using `workflow_dispatch`, so the song settings can be entered from the Actions page.
 
-## Free-first design
+## Free software
 
+- ACE-Step 1.5 — full music with vocals/lyrics, local
+- Stable Diffusion XL — AI visual scenes, local
+- Pillow — thumbnail
+- FFmpeg — video/audio assembly
 - Python
-- PyTorch
-- Hugging Face Transformers/Diffusers
-- MusicGen / AudioCraft
-- SDXL or another locally installed image model
-- Pillow
-- FFmpeg
-- Google/YouTube API for upload
+- Google YouTube Data API — upload
+- GitHub Actions — orchestration
 
-No paid music, video, thumbnail, or LLM API is included.
+No ElevenLabs, Runway, Suno, paid image API, or paid video API is used.
 
 ## Hardware
 
-AI generation is GPU-heavy. A GT 730 is not suitable for MusicGen + SDXL generation. Use a stronger local NVIDIA GPU, a self-hosted GPU machine, or another machine you control that can run the models.
+The GitHub-hosted runner is not used for the heavy AI work. The workflow requires a self-hosted runner with a GPU.
 
-## First run
+ACE-Step 1.5 supports local generation on consumer hardware; its current documentation lists about 4 GB VRAM for DiT-only mode and about 6 GB for LM + DiT, with CPU offload available for lower-VRAM systems. SDXL is heavier and benefits from substantially more VRAM.
 
-See `SETUP.md` for the exact setup and YouTube OAuth steps.
+Your GT 730 is not suitable for this AI workload, so the next step is to connect a stronger NVIDIA GPU machine as the self-hosted runner.
+
+## YouTube
+
+YouTube upload is optional. The first test should use `Upload to YouTube = false`. After the generated files work correctly, add the three YouTube secrets described in `SETUP.md` and test with `private` visibility first.
