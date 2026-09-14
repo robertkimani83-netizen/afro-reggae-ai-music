@@ -6,7 +6,7 @@ A completely separate, free-first pipeline for creating Afro-Reggae songs with v
 
 This project is intentionally separate from `next-scene-news`.
 
-The music generator now uses the **official ACE-Step 1.5 Hugging Face Space** as the online AI music engine, so your Dell GT 730 is not used for music generation. Hugging Face Spaces expose Gradio apps as callable APIs, and the official ACE-Step Space runs on ZeroGPU. citeturn0search0turn3search0
+The music generator now uses the **official ACE-Step 1.5 Hugging Face Space** as the online AI music engine, so your Dell GT 730 is not used for music generation. Hugging Face Spaces expose Gradio apps as callable APIs, and the official ACE-Step Space runs on ZeroGPU.
 
 ## Pipeline
 
@@ -24,11 +24,11 @@ GitHub Actions supports manually triggered workflows with input fields using `wo
 
 ## ACE-Step online limits
 
-The official ACE-Step v1.5 Space is currently a ZeroGPU Space. Its current deployment has a roughly 120-second GPU execution limit for free-tier generation, so this workflow defaults to about 110 seconds per generation to leave headroom. citeturn0search8
+The official ACE-Step v1.5 Space is currently a ZeroGPU Space. Its current deployment has a roughly 120-second GPU execution limit for free-tier generation, so this workflow defaults to about 110 seconds per generation to leave headroom.
 
-For more reliable access and higher daily quota, add a Hugging Face read token to the repository secret named `HF_TOKEN`. Hugging Face documents that authenticated free accounts receive a larger ZeroGPU daily quota than unauthenticated requests. citeturn3search0
+For more reliable access and higher daily quota, add a Hugging Face read token to the repository secret named `HF_TOKEN`. Hugging Face documents that authenticated free accounts receive a larger ZeroGPU daily quota than unauthenticated requests.
 
-The ACE-Step 1.5 model itself supports lyrics, vocals, 50+ languages, and variable-length music generation, and is MIT licensed. citeturn0search3turn5search1
+The ACE-Step 1.5 model supports lyrics, vocals, 50+ languages, and variable-length music generation, and is MIT licensed.
 
 ## Free software
 
