@@ -11,117 +11,119 @@ OUT.mkdir(exist_ok=True)
 with open(OUT / "metadata.json", encoding="utf-8") as f:
     meta = json.load(f)
 
-API_KEY = os.getenv("MUSICAPI_KEY")
-BASE_URL = os.getenv("MUSICAPI_BASE_URL", "https://api.musicapi.ai")
-MODEL = os.getenv("MUSICAPI_MODEL", "sonic-v6")
+BASE_URL = os.getenv("ACESTEP_BASE_URL", "http://127.0.0.1:8001")
+API_KEY = os.getenv("ACESTEP_API_KEY", "")
+MAX_SECONDS = int(os.getenv("ACESTEP_MAX_SECONDS", "120"))
+requested_minutes = max(1, int(float(os.getenv("SONG_DURATION_MIN", "2"))))
+duration = min(requested_minutes * 60, MAX_SECONDS)
 
-if not API_KEY:
-    raise RuntimeError(
-        "MUSICAPI_KEY is missing. Create a MusicAPI account/API key and add it "
-        "to GitHub Actions secrets as MUSICAPI_KEY."
-    )
-
-prompt = meta["music_prompt"]
+prompt = meta.get("music_prompt", "Afro-reggae song with warm bass, skank guitar and melodic vocals")
 lyrics = meta.get("lyrics", "")
-title = meta.get("title") or os.getenv("SONG_TITLE", "Afro-Reggae Song")
+language_text = meta.get("language", os.getenv("SONG_LANGUAGE", "English + Swahili"))
+language = "sw" if "Swahili" in language_text and "English" not in language_text else "en"
 
-# MusicAPI exposes Suno-compatible Sonic generation. Custom mode lets us send
-# the lyrics produced by this repository instead of asking the music service
-# to invent a different lyric sheet.
-tags = meta.get(
-    "music_style",
-    "Afro-reggae, reggae, African pop, warm bass, skank guitar, live drums, melodic vocals",
-)
+headers = {"Content-Type": "application/json"}
+if API_KEY:
+    headers["Authorization"] = f"Bearer {API_KEY}"
 
 payload = {
-    "task_type": "create_music",
-    "custom_mode": True,
-    "mv": MODEL,
-    "title": title,
-    "tags": tags,
-    "prompt": lyrics,
-    "gpt_description_prompt": prompt,
+    "prompt": prompt,
+    "global_caption": prompt,
+    "lyrics": lyrics,
+    "thinking": True,
+    "model": "acestep-v15-turbo",
+    "vocal_language": language,
+    "audio_duration": float(duration),
+    "inference_steps": 8,
+    "guidance_scale": 7.0,
+    "use_random_seed": True,
+    "audio_format": "mp3",
+    "task_type": "text2music",
+    "batch_size": 1,
+    "lm_backend": "pt",
 }
 
-headers = {
-    "Authorization": f"Bearer {API_KEY}",
-    "Content-Type": "application/json",
-}
+print(f"Using LOCAL ACE-Step at {BASE_URL}")
+print(f"CPU/local generation duration: {duration}s")
 
-create_url = f"{BASE_URL}/api/v1/sonic/create"
-print(f"Submitting song to Suno-compatible MusicAPI: {MODEL}")
-print(f"Title: {title}")
+health = requests.get(f"{BASE_URL}/health", timeout=20)
+health.raise_for_status()
 
-response = requests.post(create_url, headers=headers, json=payload, timeout=120)
-if not response.ok:
-    raise RuntimeError(
-        f"MusicAPI generation request failed ({response.status_code}): {response.text}"
-    )
-
-created = response.json()
-task_id = created.get("task_id") or created.get("data", {}).get("task_id")
+created = requests.post(
+    f"{BASE_URL}/release_task",
+    headers=headers,
+    json=payload,
+    timeout=120,
+)
+created.raise_for_status()
+created_data = created.json()
+task_id = created_data.get("data", {}).get("task_id")
 if not task_id:
-    raise RuntimeError(f"MusicAPI did not return a task_id: {created!r}")
+    raise RuntimeError(f"ACE-Step did not return task_id: {created_data!r}")
 
-print(f"MusicAPI task created: {task_id}")
+print(f"Local ACE-Step task: {task_id}")
 
-# A normal generation can take around two minutes. Give the remote job plenty
-# of time while keeping the GitHub job finite.
-poll_url = f"{BASE_URL}/api/v1/sonic/task/{task_id}"
-deadline = time.time() + int(os.getenv("MUSICAPI_TIMEOUT_SECONDS", "900"))
+deadline = time.time() + int(os.getenv("ACESTEP_TIMEOUT_SECONDS", "7200"))
 result = None
-
 while time.time() < deadline:
-    time.sleep(20)
-    poll = requests.get(poll_url, headers=headers, timeout=60)
-    if not poll.ok:
-        print(f"Polling returned HTTP {poll.status_code}: {poll.text}")
-        continue
-
-    result = poll.json()
-    data = result.get("data", [])
-    songs = data if isinstance(data, list) else [data]
-
-    states = [str(song.get("state", "")).lower() for song in songs if isinstance(song, dict)]
-    print(f"MusicAPI status: {states or result.get('message', 'unknown')}")
-
-    if any(state == "failed" for state in states):
-        raise RuntimeError(f"MusicAPI generation failed: {result!r}")
-    if songs and all(state == "succeeded" for state in states if state):
+    time.sleep(15)
+    response = requests.post(
+        f"{BASE_URL}/query_result",
+        headers=headers,
+        json={"task_id_list": [task_id]},
+        timeout=60,
+    )
+    response.raise_for_status()
+    result = response.json()
+    items = result.get("data", [])
+    item = items[0] if items else {}
+    status = item.get("status", 0)
+    print(f"ACE-Step status: {status}")
+    if status == 2:
+        raise RuntimeError(f"Local ACE-Step generation failed: {result!r}")
+    if status == 1:
         break
 else:
-    raise TimeoutError("MusicAPI generation timed out before a completed song was returned.")
+    raise TimeoutError("Local ACE-Step generation timed out.")
 
-if not result:
-    raise RuntimeError("MusicAPI returned no task result.")
+item = result["data"][0]
+raw_result = item.get("result", "")
+if isinstance(raw_result, str):
+    try:
+        result_items = json.loads(raw_result)
+    except json.JSONDecodeError:
+        result_items = []
+else:
+    result_items = raw_result
 
-data = result.get("data", [])
-songs = data if isinstance(data, list) else [data]
-song = next(
-    (item for item in songs if isinstance(item, dict) and item.get("audio_url")),
-    None,
-)
-if not song:
-    raise RuntimeError(f"MusicAPI returned no completed audio URL: {result!r}")
+if not result_items:
+    raise RuntimeError(f"ACE-Step returned no audio result: {result!r}")
 
-audio_url = song["audio_url"]
-out = OUT / "song.mp3"
-audio = requests.get(audio_url, timeout=300)
+first = result_items[0]
+audio_file = first.get("file") or first.get("path")
+if not audio_file:
+    raise RuntimeError(f"ACE-Step result contains no audio file: {first!r}")
+
+if audio_file.startswith("http"):
+    audio_url = audio_file
+else:
+    audio_url = f"{BASE_URL}{audio_file}" if audio_file.startswith("/") else audio_file
+
+audio = requests.get(audio_url, headers=headers, timeout=600)
 audio.raise_for_status()
+out = OUT / "song.mp3"
 out.write_bytes(audio.content)
 
-result_metadata = {
-    "provider": "MusicAPI",
-    "model": MODEL,
-    "task_id": task_id,
-    "title": song.get("title", title),
-    "duration_seconds": song.get("duration"),
-    "audio_url": audio_url,
-    "lyrics": song.get("lyrics", lyrics),
-    "tags": song.get("tags", tags),
-}
-(OUT / "musicapi_result.json").write_text(
-    json.dumps(result_metadata, indent=2, ensure_ascii=False), encoding="utf-8"
+(OUT / "acestep_result.json").write_text(
+    json.dumps({
+        "provider": "local ACE-Step 1.5",
+        "model": "acestep-v15-turbo",
+        "task_id": task_id,
+        "duration_seconds": duration,
+        "audio_file": audio_file,
+        "result": result,
+    }, indent=2, ensure_ascii=False, default=str),
+    encoding="utf-8",
 )
 
-print(f"Generated full Suno-compatible song: {out}")
+print(f"Generated local song: {out}")
