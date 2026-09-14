@@ -1,0 +1,15 @@
+torch
+transformers>=4.45
+accelerate
+sentencepiece
+safetensors
+diffusers>=0.30
+Pillow
+numpy
+scipy
+soundfile
+moviepy
+google-api-python-client
+google-auth-oauthlib
+google-auth
+requests
