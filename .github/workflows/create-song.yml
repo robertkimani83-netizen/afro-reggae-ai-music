@@ -29,9 +29,9 @@ on:
         default: 'African tropical island, cinematic, romantic, realistic'
         type: string
       duration:
-        description: 'Target duration in minutes'
+        description: 'Target duration in minutes (free online ACE-Step is capped at about 2 minutes per generation)'
         required: true
-        default: '3'
+        default: '2'
         type: string
       upload_youtube:
         description: 'Upload to YouTube after generation'
@@ -50,8 +50,8 @@ on:
 
 jobs:
   generate:
-    runs-on: [self-hosted, linux, gpu]
-    timeout-minutes: 180
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       actions: read
@@ -65,50 +65,20 @@ jobs:
       SONG_DURATION_MIN: ${{ inputs.duration }}
       YOUTUBE_UPLOAD: ${{ inputs.upload_youtube }}
       YOUTUBE_PRIVACY: ${{ inputs.youtube_privacy }}
-      ACESTEP_URL: http://127.0.0.1:8001
-      ACESTEP_OFFLOAD_TO_CPU: 'true'
+      ACE_STEP_SPACE: ACE-Step/Ace-Step-v1.5
+      ACE_STEP_MAX_SECONDS: '110'
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Check tools
+      - name: Install system tools
         run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
           python3 --version
           ffmpeg -version | head -n 1
-          nvidia-smi
-
-      - name: Install uv
-        run: |
-          if ! command -v uv >/dev/null 2>&1; then
-            curl -LsSf https://astral.sh/uv/install.sh | sh
-          fi
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          export PATH="$HOME/.local/bin:$PATH"
-          uv --version
-
-      - name: Install ACE-Step 1.5
-        run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          rm -rf vendor/ACE-Step-1.5
-          git clone --depth 1 https://github.com/ACE-Step/ACE-Step-1.5.git vendor/ACE-Step-1.5
-          cd vendor/ACE-Step-1.5
-          uv sync
-
-      - name: Start local ACE-Step API
-        run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          cd vendor/ACE-Step-1.5
-          nohup uv run acestep-api --host 127.0.0.1 --port 8001 --init_service true --config_path acestep-v15-turbo --init_llm true --lm_model_path acestep-5Hz-lm-0.6B --download-source huggingface > "$GITHUB_WORKSPACE/acestep.log" 2>&1 &
-          for i in $(seq 1 120); do
-            if curl -fsS http://127.0.0.1:8001/health >/dev/null 2>&1; then
-              echo 'ACE-Step API is ready.'
-              exit 0
-            fi
-            sleep 5
-          done
-          cat "$GITHUB_WORKSPACE/acestep.log"
-          exit 1
 
       - name: Create Python environment
         run: |
@@ -116,19 +86,18 @@ jobs:
           . .venv/bin/activate
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install -r requirements-vision.txt
 
       - name: Generate lyrics and metadata
         run: |
           . .venv/bin/activate
           python scripts/generate_metadata.py
 
-      - name: Generate full song with vocals
+      - name: Generate full song with official online ACE-Step 1.5
         run: |
           . .venv/bin/activate
           python scripts/generate_music.py
 
-      - name: Generate AI visual scenes
+      - name: Generate music-video scenes
         run: |
           . .venv/bin/activate
           python scripts/generate_scenes.py
