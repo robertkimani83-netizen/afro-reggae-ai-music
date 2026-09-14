@@ -29,7 +29,7 @@ on:
         default: 'African tropical island, cinematic, romantic, realistic'
         type: string
       duration:
-        description: 'Target duration in minutes (free online ACE-Step is capped at about 2 minutes per generation)'
+        description: 'Target duration in minutes (Suno-compatible generation determines final song length)'
         required: true
         default: '2'
         type: string
@@ -65,9 +65,9 @@ jobs:
       SONG_DURATION_MIN: ${{ inputs.duration }}
       YOUTUBE_UPLOAD: ${{ inputs.upload_youtube }}
       YOUTUBE_PRIVACY: ${{ inputs.youtube_privacy }}
-      ACE_STEP_SPACE: ACE-Step/Ace-Step-v1.5
-      ACE_STEP_MAX_SECONDS: '110'
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      MUSICAPI_KEY: ${{ secrets.MUSICAPI_KEY }}
+      MUSICAPI_MODEL: sonic-v6
+      MUSICAPI_TIMEOUT_SECONDS: '900'
 
     steps:
       - name: Checkout
@@ -92,7 +92,7 @@ jobs:
           . .venv/bin/activate
           python scripts/generate_metadata.py
 
-      - name: Generate full song with official online ACE-Step 1.5
+      - name: Generate full sung song with Suno-compatible MusicAPI
         run: |
           . .venv/bin/activate
           python scripts/generate_music.py
