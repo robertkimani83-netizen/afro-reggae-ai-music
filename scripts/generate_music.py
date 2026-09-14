@@ -1,51 +1,61 @@
-import json, os
+import json, os, time
 from pathlib import Path
 
-import torch
-import soundfile as sf
-from transformers import AutoProcessor, MusicgenForConditionalGeneration
+import requests
 
 OUT = Path('output')
-SEGMENTS = OUT / 'music_segments'
-SEGMENTS.mkdir(parents=True, exist_ok=True)
+OUT.mkdir(exist_ok=True)
 
 with open(OUT / 'metadata.json', encoding='utf-8') as f:
     meta = json.load(f)
 
+base = os.getenv('ACESTEP_URL', 'http://127.0.0.1:8001').rstrip('/')
 minutes = max(1, int(float(os.getenv('SONG_DURATION_MIN', '3'))))
-segment_seconds = 30
-segments = max(1, (minutes * 60 + segment_seconds - 1) // segment_seconds)
-model_id = os.getenv('MUSICGEN_MODEL', 'facebook/musicgen-small')
+duration = min(600, minutes * 60)
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-print(f'Loading {model_id} on {device}')
-if device == 'cpu':
-    raise SystemExit('MusicGen generation requires a capable GPU runner for this free pipeline.')
+payload = {
+    'prompt': meta['music_prompt'],
+    'lyrics': meta['lyrics'],
+    'thinking': True,
+    'use_format': True,
+    'vocal_language': 'en' if 'English' in meta['language'] else 'sw',
+    'duration': duration,
+    'audio_format': 'mp3',
+    'inference_steps': 8,
+    'model': 'acestep-v15-turbo',
+}
 
-processor = AutoProcessor.from_pretrained(model_id)
-model = MusicgenForConditionalGeneration.from_pretrained(model_id, torch_dtype=torch.float16).to(device)
-model.eval()
+print('Submitting song to local ACE-Step 1.5...')
+r = requests.post(f'{base}/release_task', json=payload, timeout=120)
+r.raise_for_status()
+data = r.json().get('data', r.json())
+task_id = data.get('task_id')
+if not task_id:
+    raise RuntimeError(f'ACE-Step did not return a task id: {r.text[:1000]}')
 
-prompts = [
-    meta['music_prompt'] + ', instrumental intro and gentle male vocal feel',
-    meta['music_prompt'] + ', energetic chorus, catchy hook and danceable groove',
-    meta['music_prompt'] + ', romantic verse, warm vocal melody and deep bass',
-    meta['music_prompt'] + ', uplifting bridge with African percussion and reggae guitar',
-    meta['music_prompt'] + ', joyful final chorus, layered harmonies and tropical atmosphere',
-]
-
-files = []
-for i in range(segments):
-    prompt = prompts[i % len(prompts)]
-    inputs = processor(text=[prompt], padding=True, return_tensors='pt').to(device)
-    max_new_tokens = int(segment_seconds * 50)
-    with torch.no_grad():
-        audio_values = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=True, guidance_scale=3.0)
-    audio = audio_values[0, 0].detach().float().cpu().numpy()
-    path = SEGMENTS / f'segment_{i+1:02d}.wav'
-    sf.write(path, audio, model.config.audio_encoder.sampling_rate)
-    files.append(str(path))
-    print(f'Generated {path}')
-
-(OUT / 'music_segments.txt').write_text('\n'.join(files), encoding='utf-8')
-print('Music generation complete.')
+while True:
+    time.sleep(5)
+    q = requests.post(f'{base}/query_result', json={'task_id_list': [task_id]}, timeout=60)
+    q.raise_for_status()
+    result = q.json().get('data', q.json())
+    row = result[0] if isinstance(result, list) else result
+    status = row.get('status')
+    print(f'ACE-Step status: {status}')
+    if status == 1:
+        raw = row.get('result', '[]')
+        items = json.loads(raw) if isinstance(raw, str) else raw
+        if not items:
+            raise RuntimeError('ACE-Step succeeded but returned no audio file.')
+        audio_path = items[0].get('file')
+        if not audio_path:
+            raise RuntimeError(f'No audio path in ACE-Step result: {items[0]}')
+        audio_url = audio_path if audio_path.startswith('http') else base + audio_path
+        audio = requests.get(audio_url, timeout=300)
+        audio.raise_for_status()
+        out = OUT / 'song.mp3'
+        out.write_bytes(audio.content)
+        (OUT / 'ace_step_result.json').write_text(json.dumps(items[0], indent=2), encoding='utf-8')
+        print(f'Generated full song: {out}')
+        break
+    if status == 2:
+        raise RuntimeError(f'ACE-Step generation failed: {row}')
