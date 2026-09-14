@@ -50,8 +50,8 @@ on:
 
 jobs:
   generate:
-    runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 240
+    runs-on: windows-latest
+    timeout-minutes: 360
     permissions:
       contents: read
       actions: read
@@ -67,7 +67,7 @@ jobs:
       YOUTUBE_PRIVACY: ${{ inputs.youtube_privacy }}
       ACESTEP_BASE_URL: http://127.0.0.1:8001
       ACESTEP_MAX_SECONDS: '120'
-      ACESTEP_TIMEOUT_SECONDS: '7200'
+      ACESTEP_TIMEOUT_SECONDS: '14400'
       CUDA_VISIBLE_DEVICES: '-1'
       HF_HUB_DISABLE_TELEMETRY: '1'
 
@@ -75,19 +75,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
       - name: Install FFmpeg
         shell: powershell
         run: |
-          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
-            winget install --id Gyan.FFmpeg.Shared --accept-source-agreements --accept-package-agreements --silent
-          }
+          choco install ffmpeg -y --no-progress
           ffmpeg -version | Select-Object -First 1
 
       - name: Prepare local ACE-Step
         shell: powershell
         run: .\scripts\setup_local_acestep.ps1
 
-      - name: Start local ACE-Step API
+      - name: Start local ACE-Step API in CPU mode
         shell: powershell
         run: |
           $env:CUDA_VISIBLE_DEVICES='-1'
@@ -97,7 +100,7 @@ jobs:
           $ace = Join-Path $env:USERPROFILE 'ACE-Step-1.5'
           Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command',"Set-Location '$ace'; `$env:CUDA_VISIBLE_DEVICES='-1'; `$env:ACESTEP_LM_BACKEND='pt'; `$env:ACESTEP_INIT_LLM='true'; uv run acestep-api --host 127.0.0.1 --port 8001 --lm_backend pt" -WindowStyle Hidden
           $ready = $false
-          for ($i=0; $i -lt 120; $i++) {
+          for ($i=0; $i -lt 180; $i++) {
             try {
               $r = Invoke-WebRequest -Uri 'http://127.0.0.1:8001/health' -UseBasicParsing -TimeoutSec 5
               if ($r.StatusCode -eq 200) { $ready = $true; break }
@@ -107,32 +110,31 @@ jobs:
           if (-not $ready) { throw 'Local ACE-Step API did not become ready.' }
           Write-Host 'Local ACE-Step API is ready.'
 
-      - name: Create Python environment
+      - name: Install pipeline Python dependencies
         shell: powershell
         run: |
-          py -3.11 -m venv .venv
-          .\.venv\Scripts\python.exe -m pip install --upgrade pip
-          .\.venv\Scripts\pip.exe install -r requirements.txt
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: Generate lyrics and metadata
         shell: powershell
-        run: .\.venv\Scripts\python.exe scripts\generate_metadata.py
+        run: python scripts\generate_metadata.py
 
       - name: Generate full song locally with ACE-Step
         shell: powershell
-        run: .\.venv\Scripts\python.exe scripts\generate_music.py
+        run: python scripts\generate_music.py
 
       - name: Generate music-video scenes
         shell: powershell
-        run: .\.venv\Scripts\python.exe scripts\generate_scenes.py
+        run: python scripts\generate_scenes.py
 
       - name: Assemble music video
         shell: powershell
-        run: .\.venv\Scripts\python.exe scripts\assemble_video.py
+        run: python scripts\assemble_video.py
 
       - name: Generate thumbnail
         shell: powershell
-        run: .\.venv\Scripts\python.exe scripts\generate_thumbnail.py
+        run: python scripts\generate_thumbnail.py
 
       - name: Upload to YouTube
         if: ${{ inputs.upload_youtube }}
@@ -141,7 +143,7 @@ jobs:
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         shell: powershell
-        run: .\.venv\Scripts\python.exe scripts\upload_youtube.py
+        run: python scripts\upload_youtube.py
 
       - name: Publish generated files as artifact
         uses: actions/upload-artifact@v4
