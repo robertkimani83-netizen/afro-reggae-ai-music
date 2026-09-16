@@ -78,12 +78,23 @@ or looking at whether a better-suited free model exists by then.
 No paid AI API is required:
 
 - Gemini: free tier (same key you already use for `next-scene-news`).
-- DiffRhythm singing: Hugging Face's free ZeroGPU Space -- a shared public
-  resource. It's genuinely free, but it's not Robert's dedicated compute:
-  it could occasionally be slow, hit a shared usage limit, or change its
-  interface, since none of that is under your control. If it becomes
-  unreliable in practice, the fallback is a small per-song paid vocal API
-  (e.g. Suno's official API) instead of this free shared one.
+- Singing: `generate_music.py` tries a short chain of free Hugging Face
+  ZeroGPU Spaces before giving up -- YuE2-3B with your HF_TOKEN, then
+  YuE2-3B anonymously, then DiffRhythm with your token, then DiffRhythm
+  anonymously. These are shared public resources, not Robert's dedicated
+  compute, so they can occasionally be slow, hit a shared usage limit
+  (Hugging Face's free ZeroGPU tier caps GPU-seconds per account per day,
+  shared across every free Space you call), or change their interface.
+  Trying anonymously as well as with your token, and trying a second Space,
+  covers most of that -- but if the whole chain ever fails in practice,
+  that's the point to reconsider a small paid vocal API (e.g. ElevenLabs'
+  official Music API, roughly $0.64/minute) as a last resort. Robert
+  explicitly chose to keep this free-only for now rather than add one --
+  see `scripts/generate_music.py`'s docstring for the full reasoning.
+  (Earlier drafts of this README mentioned "Suno's official API" as that
+  fallback -- that was wrong; Suno has no official public API, only
+  unofficial third-party resellers, which isn't something worth building
+  on.)
 - Pexels: free tier stock photos (same key you already use for
   `next-scene-news`).
 - YouTube upload: free, standard YouTube Data API.
