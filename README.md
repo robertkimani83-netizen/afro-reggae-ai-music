@@ -1,63 +1,91 @@
 # Afro-Reggae AI Music
 
-A completely separate, free, local-first pipeline for creating Afro-Reggae songs with vocals, music-video visuals, thumbnails, and YouTube-ready videos.
+A free, fully-automated pipeline for creating original Afro-Reggae/Lovers
+Rock love songs -- real AI-written lyrics, real AI-sung vocals, a music
+video built from real photos, a thumbnail, and (optionally) a direct upload
+to NEXT VIBE MUSIC.
 
-## Important
+This project is intentionally separate from `next-scene-news` (the
+NEXTSCENE TV pipeline) -- different channel, different content, its own
+repo and secrets.
 
-This project is intentionally separate from `next-scene-news`.
+## Sept 15 2026 rebuild -- what changed and why
 
-The music generator now uses **local ACE-Step 1.5** on your own Windows PC. There is no Suno API, no MusicAPI, no Hugging Face Space, no `HF_TOKEN`, and no paid music service.
+The previous version of this pipeline never actually produced a video. All
+3 test runs failed. On top of that, two things were quietly broken even
+before the failure:
 
-ACE-Step officially supports CPU-only inference, although it is significantly slower than GPU inference. The workflow therefore uses the PC as a self-hosted GitHub Actions runner and forces CPU mode. citeturn0search1
+- **Lyrics weren't AI-generated at all.** `generate_metadata.py` used two
+  hardcoded lyric templates and returned the literal same "Sweet island
+  loving..." song every single run, no matter what title/theme/mood you
+  typed into the workflow form.
+- **The music engine needed a real GPU.** It tried to run ACE-Step 1.5 (a
+  full AI singing model) locally, either on your own PC or on a GitHub
+  runner. Neither has a GPU capable of that: your PC's GT 730 was already
+  flagged in this repo's own old notes as too weak, and GitHub's free
+  runners have no GPU at all. The last attempt just sat waiting ~25 minutes
+  for the model to start, then gave up.
+
+This rebuild fixes both:
+
+- **Lyrics, title, style, description and tags now come from a real Gemini
+  call** (`scripts/generate_metadata.py`), the same way the news channel's
+  pipeline writes real scripts -- so every song is genuinely about what you
+  typed in, not a fixed template.
+- **Singing now happens on Hugging Face's free "ZeroGPU" shared GPU pool**,
+  via the open-source [DiffRhythm](https://github.com/ASLP-lab/DiffRhythm)
+  model's public Space (`scripts/generate_music.py`). This machine (or the
+  GitHub runner) never needs a GPU itself -- it just sends a request over
+  the internet and gets a finished song back, the same pattern already used
+  for FLUX thumbnail backgrounds in `next-scene-news`.
+- **Music-video scenes are now real photos from Pexels** (free stock photo
+  API, same service the news channel already uses), instead of plain
+  color-gradient cards.
+- **The whole workflow runs on a normal free `ubuntu-latest` GitHub runner**
+  -- no self-hosted runner, no Windows, no local model installs. This is
+  also cheaper on your free Actions minutes (Windows runners count double).
+
+## One real limitation: English only, for now
+
+DiffRhythm's own lyrics tool only lists English and Chinese as supported
+languages -- there's no Swahili option, which strongly suggests the model
+wasn't trained on it. Feeding it Swahili lines would likely come out
+mispronounced or garbled. So for now, songs are written and sung in English
+only, even though your channel's earlier videos mixed in Swahili phrases.
+Once this pipeline is proven working end-to-end, it's worth revisiting --
+either testing how the model actually handles a few Swahili words anyway,
+or looking at whether a better-suited free model exists by then.
 
 ## Complete pipeline
 
-1. Open GitHub Actions.
-2. Choose **Create Afro-Reggae Song**.
-3. Enter song title, theme, mood, language, visual style and duration.
-4. GitHub sends the job to the Windows self-hosted runner.
-5. The runner starts local ACE-Step 1.5.
-6. Lyrics and music metadata are generated.
-7. The lyrics and Afro-Reggae prompt are sent to local ACE-Step.
-8. ACE-Step creates the sung song locally.
-9. The generated MP3 is saved as `output/song.mp3`.
-10. Cinematic visual scenes are created.
-11. FFmpeg combines the visuals and song.
-12. A 1280x720 thumbnail is created.
-13. YouTube upload is optional.
-14. All generated files are saved as a GitHub Actions artifact.
+1. Open GitHub Actions -> **Create Afro-Reggae Song** -> Run workflow.
+2. Enter a song title/theme/mood/visual style, and a target duration
+   (1.6-4.75 minutes -- DiffRhythm's supported range).
+3. Gemini writes real lyrics, a title, a music style description, six photo
+   search queries, a YouTube description and tags.
+4. The lyrics are time-stamped into the LRC format DiffRhythm needs.
+5. DiffRhythm (free HF Space) generates the actual sung song.
+6. Pexels supplies six real photos matching the song's story/mood.
+7. FFmpeg turns those photos into a slow Ken Burns-style video and mixes in
+   the song.
+8. A thumbnail is generated.
+9. YouTube upload is optional (off by default for testing).
+10. Everything generated is saved as a GitHub Actions artifact either way,
+    so you can review a run before ever enabling upload.
 
-The current ACE-Step API uses `POST /release_task`, `POST /query_result`, and `/v1/audio` for asynchronous local generation and audio download. citeturn1search4turn1search7
+## Free, and what "free" depends on
 
-## No API / no payment
+No paid AI API is required:
 
-The music stage requires:
+- Gemini: free tier (same key you already use for `next-scene-news`).
+- DiffRhythm singing: Hugging Face's free ZeroGPU Space -- a shared public
+  resource. It's genuinely free, but it's not Robert's dedicated compute:
+  it could occasionally be slow, hit a shared usage limit, or change its
+  interface, since none of that is under your control. If it becomes
+  unreliable in practice, the fallback is a small per-song paid vocal API
+  (e.g. Suno's official API) instead of this free shared one.
+- Pexels: free tier stock photos (same key you already use for
+  `next-scene-news`).
+- YouTube upload: free, standard YouTube Data API.
 
-- No Suno account
-- No Suno API
-- No MusicAPI key
-- No Hugging Face token
-- No paid subscription
-- No paid music credits
-
-ACE-Step is downloaded and run locally. Models are downloaded on the first run. citeturn0search1
-
-## PC requirement
-
-The current PC can run the pipeline in CPU mode, but music generation can be slow. ACE-Step's documentation explicitly says CPU inference is supported and significantly slower. citeturn0search1
-
-The repository includes `scripts/setup_local_acestep.ps1`, which downloads ACE-Step and installs its environment automatically when the workflow first runs.
-
-## GitHub runner
-
-The workflow uses:
-
-```text
-runs-on: [self-hosted, Windows, X64]
-```
-
-This means the Windows PC must have a GitHub self-hosted runner registered for this repository. Once registered, GitHub can send the complete job to the PC automatically.
-
-## YouTube
-
-YouTube upload is optional. The first test should use `Upload to YouTube = false`. After the generated files work correctly, YouTube can be enabled with the existing YouTube secrets.
+See `SETUP.md` for exactly which secrets to add.

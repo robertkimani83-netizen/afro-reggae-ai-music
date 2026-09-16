@@ -1,5 +1,4 @@
 Pillow
-numpy
 requests
 gradio_client
 google-api-python-client

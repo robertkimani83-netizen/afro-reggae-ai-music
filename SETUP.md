@@ -1,81 +1,69 @@
 # Setup
 
-## 1. GPU runner
+No self-hosted runner, no GPU, no local installs -- everything runs on
+GitHub's free `ubuntu-latest` runner. You just need 3-6 free API
+credentials added as repository secrets.
 
-The generation workflow targets:
+**GitHub -> this repo -> Settings -> Secrets and variables -> Actions ->
+New repository secret**
 
-`self-hosted, linux, gpu`
+## 1. Gemini (writes the lyrics/title/description/tags)
 
-You need a Linux machine with an NVIDIA GPU, working NVIDIA drivers, Python 3, curl and FFmpeg. The machine should have enough free disk space for the models.
+- `GEMINI_API_KEY` -- if you already have one from setting up
+  `next-scene-news`, reuse the same value here (secrets don't carry across
+  repos, so it needs to be added again in this one).
+- Free tier is enough. Get one at https://aistudio.google.com/apikey if you
+  don't already have one.
 
-GitHub Actions is only the automation layer. Heavy AI generation runs on your own runner so there is no paid AI API.
+## 2. Hugging Face (runs the actual AI singing, for free, on their shared GPU pool)
 
-### Add the runner
+- `HF_TOKEN` -- again, reuse your existing token if you set one up for
+  `next-scene-news`'s thumbnail generator, otherwise create a free account
+  at https://huggingface.co and generate a token (Settings -> Access
+  Tokens -> a "read" token is enough).
+- This isn't strictly required (the DiffRhythm Space can be called
+  anonymously), but an authenticated call gets a bigger, steadier free
+  ZeroGPU quota than an anonymous one.
 
-In GitHub open:
+## 3. Pexels (real photos for the music video)
 
-**Repository → Settings → Actions → Runners → New self-hosted runner**
+- `PEXELS_API_KEY` -- reuse your existing key from `next-scene-news` if you
+  have one, otherwise get a free one at https://www.pexels.com/api/.
 
-Choose Linux/x64 and follow GitHub's commands on the GPU machine.
+## 4. YouTube upload (optional -- only needed once you're ready to publish)
 
-Give the runner the labels:
+This channel (NEXT VIBE MUSIC) is a different YouTube channel from
+NEXTSCENE TV, so it needs its own OAuth credentials authorized against
+*that* channel's Google account -- you can't reuse the `next-scene-news`
+repo's YOUTUBE_* secrets here even if it's the same Google Cloud project.
 
-- `self-hosted`
-- `linux`
-- `gpu`
+- Create OAuth credentials for a desktop application in Google Cloud
+  Console, enable **YouTube Data API v3**, and go through the OAuth consent
+  flow signed in as whichever Google account owns/manages NEXT VIBE MUSIC,
+  to get a refresh token for that channel.
+- Add:
+  - `YOUTUBE_CLIENT_ID`
+  - `YOUTUBE_CLIENT_SECRET`
+  - `YOUTUBE_REFRESH_TOKEN`
+- Leave **Upload to YouTube = false** for your first several test runs.
+  Every run (upload on or off) saves its result as a downloadable GitHub
+  Actions artifact, so you can listen to and watch the song before it ever
+  touches YouTube. Once you're happy with a run, turn upload on and start
+  with `private` visibility.
 
-## 2. Music model
+## 5. Run it
 
-The workflow downloads and installs the open-source **ACE-Step 1.5** project automatically on the runner. ACE-Step supports full-song generation with lyrics/vocals and local inference. Its current documentation lists automatic model download and a REST API server on port 8001.
+**GitHub -> this repo -> Actions -> Create Afro-Reggae Song -> Run workflow**
 
-The workflow starts the local ACE-Step API and then sends it the generated lyrics and Afro-Reggae prompt.
-
-## 3. AI visual model
-
-The scene generator uses:
-
-`stabilityai/stable-diffusion-xl-base-1.0`
-
-You can change the model by setting `IMAGE_MODEL_ID` in the workflow/environment later.
-
-The six generated images are converted into a music-video sequence with FFmpeg camera movement. This keeps the whole system free and local.
-
-## 4. YouTube upload
-
-The upload script uses the official YouTube Data API.
-
-Create Google OAuth credentials for a desktop application, enable **YouTube Data API v3**, authorize your YouTube channel, and obtain a refresh token.
-
-Add these repository secrets:
-
-- `YOUTUBE_CLIENT_ID`
-- `YOUTUBE_CLIENT_SECRET`
-- `YOUTUBE_REFRESH_TOKEN`
-
-Never put these values inside the code.
-
-For the first test, keep **Upload to YouTube = false**. After the video is successfully generated, test with YouTube visibility `private`.
-
-## 5. Run the pipeline
-
-Open:
-
-**GitHub → afro-reggae-ai-music → Actions → Create Afro-Reggae Song → Run workflow**
-
-GitHub supports manually running a `workflow_dispatch` workflow and filling its input fields from the Actions page.
-
-Use:
-
-- Title: `Sweet Island Loving`
-- Theme: `Romantic island love under the African sunset`
-- Mood: `Romantic, warm, uplifting`
-- Language: `English + Swahili`
-- Video style: `African tropical island, cinematic, romantic, realistic`
-- Duration: `3`
-- Upload: `false`
+Fill in a title, theme, mood, visual style, and a duration between 1.6 and
+4.75 minutes (DiffRhythm's supported range -- anything outside it gets
+clamped automatically). Leave "Upload to YouTube" unchecked for the first
+run.
 
 ## 6. Cost
 
-There are no paid AI APIs in this repository. ACE-Step, SDXL, FFmpeg, Python and the other software are used locally.
-
-The only unavoidable requirement is computing hardware. Your GT 730 is not powerful enough for this workload. A stronger NVIDIA GPU machine must be used as the self-hosted runner.
+Genuinely free with the credentials above -- Gemini, Hugging Face ZeroGPU,
+Pexels and YouTube all have free tiers this pipeline stays within for
+normal use. The one thing that isn't fully under your control is that the
+Hugging Face Space is a shared public resource, not dedicated compute --
+see the README for the trade-off and the fallback if it's ever unreliable.
