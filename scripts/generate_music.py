@@ -72,7 +72,10 @@ if not lrc.strip():
     raise RuntimeError("metadata.json has no lrc lyrics -- run generate_metadata.py first.")
 
 print(f"[music] connecting to {SPACE_ID}", file=sys.stderr)
-client = Client(SPACE_ID, hf_token=HF_TOKEN)
+# gradio_client's Client() takes the HF auth kwarg as `token` (not `hf_token`
+# as some older docs/tutorials show) -- confirmed against the actually
+# installed gradio_client version rather than assumed.
+client = Client(SPACE_ID, token=HF_TOKEN)
 
 api_info = {}
 try:
