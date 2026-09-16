@@ -1,49 +1,57 @@
-"""Generates the full sung song using DiffRhythm, a free open-source
-full-song (lyrics + vocals + instrumentation) model, via its public
-Hugging Face Space -- https://huggingface.co/spaces/ASLP-lab/DiffRhythm.
+"""Generates the full sung song using YuE2-3B, a free open-source full-song
+(lyrics + vocals + instrumentation) model, via its public Hugging Face Space
+-- https://huggingface.co/spaces/mrfakename/yue2-3b.
 
-Sept 15 2026: replaces the local ACE-Step 1.5 approach, which failed all 3
-times it was tried (the most recent failure was the local API never
-finishing startup within its 15-minute wait window on GitHub's free Windows
-runner). The core problem was architectural: ACE-Step needs real GPU compute
-to run in reasonable time, and neither GitHub's free runners nor this
-project's available hardware have one.
+Sept 16 2026: replaces DiffRhythm (ASLP-lab/DiffRhythm). DiffRhythm's calling
+code was fully debugged and working -- it successfully reached real model
+execution on Hugging Face's shared ZeroGPU pool -- but then failed on the
+SERVER side, identically, 3 times in a row (even with automatic retries),
+with `AppError: CUDA error: no kernel image is available for execution on
+the device`. That specific error means the PyTorch build baked into that
+particular Space doesn't include compiled kernels for whatever GPU
+architecture Hugging Face is currently handing ZeroGPU Spaces -- a
+deterministic environment bug in that Space itself, not something any
+number of retries or parameter changes on our end could fix. (Two other
+free full-song-with-vocals Spaces were also checked at the time and were
+both down too -- fffiloni/YuE was paused, innova-ai/YuE-music-generator-demo
+had a build error. YuE2-3B was the one actually running.)
 
-DiffRhythm sidesteps that by NOT running locally at all -- the actual model
-runs on Hugging Face's free "ZeroGPU" shared GPU pool (this Space has had
-ZeroGPU access since March 2025), and this script just calls it like an API
-over the internet using `gradio_client`, the same way generate_scenes.py
-used to reach for a local SDXL pipeline. This machine (or the GitHub-hosted
-runner) never needs a GPU -- it's just sending a request and waiting for the
-result, which is normally fast (published benchmarks put a ~4-5 minute song
-at well under a minute of actual GPU time).
+Like DiffRhythm, YuE2-3B runs entirely on Hugging Face's free "ZeroGPU"
+shared GPU pool -- this machine (or the GitHub-hosted runner) never needs a
+GPU itself, it just calls the Space like an API over the internet using
+`gradio_client` and waits for a finished song back.
 
-Known limitation (Sept 15 2026): this Space's own lyrics-writing tool only
-lists English and Chinese as supported languages -- there's no Swahili
-option, which strongly suggests the underlying model wasn't trained on it.
-generate_metadata.py writes English-only lyrics for this reason. See the
-comment there for more.
+Interface differences from DiffRhythm that shaped this rewrite:
+  - No LRC/timestamp format -- YuE2-3B takes plain lyrics with [Verse] /
+    [Chorus] / [Bridge] section tags (see generate_metadata.py), and no
+    separate reference-audio input.
+  - No explicit duration parameter -- the song's length comes out of how
+    much lyrics content you give it (more verses/choruses = a longer song),
+    so assemble_video.py's existing approach of measuring the actual
+    rendered song.mp3 with ffprobe (rather than trusting a pre-set number)
+    already handles this with no changes needed there.
+  - Its "Create" tab exposes a `generate_song` function with no explicit
+    api_name set on its .click() wiring, so Gradio auto-derives the API
+    name from the Python function name -- expected to be "/generate_song",
+    with the same defensive introspection/fallback-matching used for
+    DiffRhythm in case that's ever wrong.
+  - Output is already an MP3 path (plus a FLAC download and an editable
+    symbolic score we don't need) -- no wav->mp3 conversion needed in the
+    normal case.
 
-This also means generation quality/availability depends on a public,
-shared, free HF Space that isn't under Robert's control -- it could change
-its interface, get paused, or hit shared usage limits at busy times. That's
-a real trade-off of using a free shared resource instead of paid, dedicated
-compute. If this becomes unreliable in practice, the fallback is a small
-per-song paid vocal API (e.g. Suno's official API).
-
-IMPORTANT -- this call could not be live-tested from the environment that
-wrote this patch (its sandbox blocks huggingface.co outbound by policy, the
-same restriction that applies to unrelated services -- this is a sandbox
-policy, not a sign the service itself is down). The exact keyword names below
-come from reading the Space's own app.py source directly. The defensive
-introspection logging below is there specifically so that if the interface
-has changed a parameter name since, the failure shows up as a clear,
-readable error in the GitHub Actions log instead of a silent wrong result --
-check that log first if this step ever fails.
+IMPORTANT -- like the DiffRhythm integration before it, this call could not
+be live-tested from the environment that wrote this patch (its sandbox
+blocks huggingface.co outbound by policy). The parameter names/defaults
+below come from reading the Space's own app.py source directly. The
+defensive introspection logging is there specifically so that if the
+interface has changed since, the failure shows up as a clear, readable
+error in the GitHub Actions log instead of a silent wrong result -- check
+that log first if this step ever fails.
 """
 
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
@@ -60,23 +68,15 @@ with open(OUT / "metadata.json", encoding="utf-8") as f:
     meta = json.load(f)
 
 HF_TOKEN = os.environ.get("HF_TOKEN") or None  # optional, but gives a bigger/steadier free ZeroGPU quota than anonymous calls
-SPACE_ID = os.getenv("DIFFRHYTHM_SPACE", "ASLP-lab/DiffRhythm")
+SPACE_ID = os.getenv("MUSIC_SPACE", "mrfakename/yue2-3b")
 
-lrc = meta.get("lrc", "")
+lyrics = meta.get("lyrics", "")
 style_prompt = meta.get("music_style_prompt", "Warm Afro-Reggae with offbeat guitar skank, mellow bassline, African percussion, smooth romantic lead vocal")
-duration_seconds = float(meta.get("target_duration_seconds", 120))
-# DiffRhythm's own slider only accepts 95-285 seconds -- generate_metadata.py
-# already clamps to this range, but re-clamp here too in case this script
-# is ever run on an older metadata.json.
-duration_seconds = max(95.0, min(285.0, duration_seconds))
 
-if not lrc.strip():
-    raise RuntimeError("metadata.json has no lrc lyrics -- run generate_metadata.py first.")
+if not lyrics.strip():
+    raise RuntimeError("metadata.json has no lyrics -- run generate_metadata.py first.")
 
 print(f"[music] connecting to {SPACE_ID}", file=sys.stderr)
-# gradio_client's Client() takes the HF auth kwarg as `token` (not `hf_token`
-# as some older docs/tutorials show) -- confirmed against the actually
-# installed gradio_client version rather than assumed.
 client = Client(SPACE_ID, token=HF_TOKEN)
 
 api_info = {}
@@ -88,66 +88,36 @@ except Exception as err:  # noqa: BLE001 - introspection is best-effort logging,
 endpoint_names = list((api_info.get("named_endpoints") or {}).keys())
 print(f"[music] available endpoints: {endpoint_names}", file=sys.stderr)
 
-# Prefer the exact name from the Space's source; fall back to any endpoint
-# that looks like the main song generator (and isn't the separate
-# lyrics-writing helper endpoints) if the exact name has since changed.
-api_name = "/infer_music"
+# The Space's own .click() wiring doesn't set an explicit api_name, so
+# Gradio auto-derives one from the Python function name (generate_song).
+# Fall back to fuzzy matching if that's ever changed.
+api_name = "/generate_song"
 if endpoint_names and api_name not in endpoint_names:
-    guesses = [n for n in endpoint_names if "infer_music" in n.lower()]
+    guesses = [n for n in endpoint_names if "generate_song" in n.lower()]
     if not guesses:
-        guesses = [n for n in endpoint_names if "infer" in n.lower() and "r1" not in n.lower() and "lyric" not in n.lower()]
+        guesses = [
+            n for n in endpoint_names
+            if "generat" in n.lower() and "cover" not in n.lower() and "lyric" not in n.lower() and "analy" not in n.lower()
+        ]
     if guesses:
-        print(f"[music] '/infer_music' not found, trying closest match: {guesses[0]}", file=sys.stderr)
+        print(f"[music] '/generate_song' not found, trying closest match: {guesses[0]}", file=sys.stderr)
         api_name = guesses[0]
     else:
         raise RuntimeError(
             f"Could not find the song-generation endpoint on {SPACE_ID}. "
             f"Available endpoints were: {endpoint_names}. The Space's interface "
-            "may have changed -- check https://huggingface.co/spaces/ASLP-lab/DiffRhythm/blob/main/app.py "
+            "may have changed -- check https://huggingface.co/spaces/mrfakename/yue2-3b/blob/main/app.py "
             "for the current function name and update api_name above."
         )
 
-print(f"[music] requesting a {duration_seconds:.0f}s song via {api_name}", file=sys.stderr)
+# A fresh random seed per run -- the Space's own UI default (42) is just a
+# fixed starting point for manual experimentation, not meant to be reused
+# unchanged on every automated call, which would make every song's melody
+# come out overly similar.
+seed = random.randint(1, 2_000_000_000)
 
-# Sept 16 2026: the call below was corrected against the Space's REAL live
-# API error message (gradio_client prints the full parameter list when a
-# call fails), not just the app.py source reading that shaped the first
-# attempt. Real differences found: `current_prompt_type`, `edit` and
-# `edit_segments` aren't actually part of the callable API at all (they're
-# internal Gradio UI state, only used to switch which tab is visible -- not
-# passed to the inference function).
-#
-# Sept 16 2026 (second correction): every one of the fields above matched
-# fine and only the duration field was rejected as an unrecognized keyword,
-# even though gradio's own error message displayed it as lowercase
-# `music_duration`. gradio_client matches keywords against the underlying
-# Python function's actual parameter name, not the cleaned-up display text
-# in its error message -- and the real function signature (read directly
-# from the Space's source) declares it as `Music_Duration`, capital M. That
-# mismatch between what the error message shows and what it actually checks
-# against is the real lesson here: trust the source, not the pretty-printed
-# usage text, when the two disagree.
-#
-# Sept 16 2026 (third correction): leaving `ref_audio_path` out entirely was
-# meant to fall back to the Space's default reference clip, but gradio_client
-# handles a file-typed default by trying to resolve/upload an already-cached
-# local copy of that default file -- which doesn't exist in a fresh GitHub
-# Actions runner, so it crashed with a FileNotFoundError before ever reaching
-# the server. Passing `None` explicitly avoids that client-side default-file
-# resolution altogether (we want text_prompt driving the style anyway, not a
-# generic reference clip).
-#
-# Sept 16 2026 (fourth issue -- not a bug in this script): once all the
-# parameter/connection issues above were fixed, the call successfully
-# reached real model execution on Hugging Face's shared ZeroGPU pool and
-# failed there with `AppError: CUDA error: no kernel image is available
-# for execution on the device`. That's a server-side crash on the Space's
-# own GPU allocation, not anything wrong with what we're sending it --
-# ZeroGPU hands out GPUs from a shared pool on each call, and an
-# occasional bad/incompatible allocation for one call is a known class of
-# transient failure on that kind of infrastructure. So retry a few times
-# with a short wait before giving up, rather than failing the whole run
-# over what's likely a one-off bad GPU assignment.
+print(f"[music] requesting a song via {api_name} (seed {seed})", file=sys.stderr)
+
 MAX_ATTEMPTS = 3
 RETRY_WAIT_SECONDS = 30
 
@@ -155,58 +125,54 @@ result = None
 for attempt in range(1, MAX_ATTEMPTS + 1):
     try:
         result = client.predict(
-            lrc=lrc,
-            ref_audio_path=None,
-            text_prompt=style_prompt,
-            seed=0,
-            randomize_seed=True,
-            steps=32,
-            cfg_strength=4.0,
-            file_type="mp3",
-            odeint_method="euler",
-            preference_infer="quality first",
-            Music_Duration=duration_seconds,
+            style=style_prompt,
+            lyrics=lyrics,
+            planning_mode="off",  # "No score" -- fastest, and we don't use the editable-score output anyway
+            render_quality=16,  # "Fast" -- keeps each ZeroGPU call well within its free time allocation
+            seed=seed,
             api_name=api_name,
         )
         break
     except AppError as err:
         if attempt >= MAX_ATTEMPTS:
             raise RuntimeError(
-                f"DiffRhythm failed on the server side {MAX_ATTEMPTS} times in a row "
+                f"YuE2-3B failed on the server side {MAX_ATTEMPTS} times in a row "
                 f"(most recent error: {err}). This is happening on Hugging Face's own "
                 "shared ZeroGPU infrastructure, not in this script -- if it keeps "
-                "failing on later runs too, the free Space itself may be having a bad "
-                "day and it's worth trying again later, or reconsidering the paid "
-                "fallback mentioned in README.md."
+                "failing on later runs too, this Space may be having a bad day and "
+                "it's worth trying again later, or reconsidering the paid fallback "
+                "mentioned in README.md."
             ) from err
         print(
-            f"[music] DiffRhythm returned a server-side error on attempt {attempt}/{MAX_ATTEMPTS} "
-            f"(likely a transient shared-GPU allocation issue): {err}\n"
+            f"[music] YuE2-3B returned a server-side error on attempt {attempt}/{MAX_ATTEMPTS} "
+            f"(possibly a transient shared-GPU issue): {err}\n"
             f"[music] retrying in {RETRY_WAIT_SECONDS}s...",
             file=sys.stderr,
         )
         time.sleep(RETRY_WAIT_SECONDS)
 
-# The Audio output component can come back as a plain filepath string, or as
-# a dict/tuple wrapping one, depending on gradio_client version -- handle
-# whichever shape shows up rather than assuming one.
+# generate_song() returns (mp3_path, flac_path, score) -- a plain 3-tuple,
+# not wrapped in gradio_client's usual dict/FileData shapes, since these are
+# plain str/str/str return values from the Space's own Python function. But
+# handle the other shapes gradio_client sometimes uses too, in case the
+# Space's return signature ever changes.
 audio_path = None
-if isinstance(result, str):
-    audio_path = result
-elif isinstance(result, (list, tuple)) and result:
+if isinstance(result, (list, tuple)) and result:
     first = result[0]
     audio_path = first if isinstance(first, str) else (first.get("name") or first.get("path") if isinstance(first, dict) else None)
+elif isinstance(result, str):
+    audio_path = result
 elif isinstance(result, dict):
     audio_path = result.get("name") or result.get("path")
 
 if not audio_path or not Path(audio_path).exists():
-    raise RuntimeError(f"DiffRhythm did not return a usable audio file. Raw result: {result!r}")
+    raise RuntimeError(f"YuE2-3B did not return a usable audio file. Raw result: {result!r}")
 
 print(f"[music] received generated audio: {audio_path}", file=sys.stderr)
 
-# Normalize to output/song.mp3 regardless of what format the Space returned
-# (requested wav, since that's guaranteed valid; convert here rather than
-# guessing at whichever format string the Space's file_type option expects).
+# Normalize to output/song.mp3 -- generate_song() already returns an MP3 in
+# the normal case, so this is usually a plain copy; convert only if it ever
+# comes back as something else.
 out = OUT / "song.mp3"
 if Path(audio_path).suffix.lower() == ".mp3":
     shutil.copyfile(audio_path, out)
@@ -219,10 +185,10 @@ else:
 (OUT / "music_generation_result.json").write_text(
     json.dumps(
         {
-            "provider": "DiffRhythm (free Hugging Face ZeroGPU Space)",
+            "provider": "YuE2-3B (free Hugging Face ZeroGPU Space)",
             "space": SPACE_ID,
             "api_name": api_name,
-            "duration_seconds": duration_seconds,
+            "seed": seed,
             "style_prompt": style_prompt,
         },
         indent=2,

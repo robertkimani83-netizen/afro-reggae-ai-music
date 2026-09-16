@@ -9,14 +9,26 @@ calls Gemini for real, the same way generate-short.mjs / generate-
 documentary.mjs do in the next-scene-news repo, so lyrics genuinely follow
 the theme/mood you give it.
 
-Language note (Sept 15 2026): the free DiffRhythm model used for singing
-(see generate_music.py) only supports English and Chinese vocals -- its own
-built-in lyrics tool literally only offers those two languages, no Swahili.
-Singing Swahili lines through it would likely come out mispronounced/
-garbled since the model was never trained on it. So this generates English
-lyrics for now. Once the pipeline is proven end-to-end, mixing in Swahili
-phrases can be revisited (e.g. testing how the model actually handles a few
-Swahili words even though it's unsupported, or looking at other models).
+Language note (Sept 15 2026): the free singing model used by generate_music.py
+only supports English and Chinese vocals, no Swahili. So this generates
+English lyrics for now. Once the pipeline is proven end-to-end, mixing in
+Swahili phrases can be revisited (e.g. testing how the model actually
+handles a few Swahili words even though it's unsupported, or looking at
+other models).
+
+Sept 16 2026: switched the singing model from DiffRhythm to YuE2-3B (see
+generate_music.py's docstring for why -- short version: DiffRhythm hit a
+deterministic server-side CUDA/environment bug on its Hugging Face Space
+that retries couldn't fix). This changed the required lyrics FORMAT: it no
+longer takes evenly-timestamped LRC text, it takes plain lyrics with
+[Verse]/[Chorus]/[Bridge] section tags and a blank line between sections --
+the song's actual length comes out of how much lyrics content is given to
+it (more sections = a longer song) rather than a separate duration
+parameter, and assemble_video.py already measures the real rendered
+song.mp3 with ffprobe rather than trusting a pre-set number, so no change
+was needed there. This file now asks Gemini directly for that tagged
+format, and uses the requested duration only as a rough guide for how many
+verse/chorus sections to write, not a strict clamp.
 
 NOTE ON STRING FORMATTING: this file builds the Gemini prompt with plain
 string concatenation / f-strings around whole variables, NOT str.format()
@@ -48,11 +60,15 @@ mood = os.getenv("SONG_MOOD", "Romantic, warm, uplifting")
 language = os.getenv("SONG_LANGUAGE", "English")
 style = os.getenv("VIDEO_STYLE", "African tropical island, cinematic, romantic, realistic")
 
-# DiffRhythm's Music_Duration input only accepts 95-285 seconds -- clamp
-# whatever the workflow was given into that range rather than letting an
-# out-of-range value fail deep inside generate_music.py.
-requested_minutes = max(1.0, float(os.getenv("SONG_DURATION_MIN", "2")))
-target_duration_seconds = max(95, min(285, int(requested_minutes * 60)))
+# YuE2-3B has no duration input -- the song's length follows however much
+# lyrics content it's given. Use the requested minutes as a rough guide for
+# how many verse/chorus sections to ask Gemini to write, loosely clamped to
+# a sane range (a 1-section song or a 12-verse epic are both a bad time).
+requested_minutes = max(1.0, min(6.0, float(os.getenv("SONG_DURATION_MIN", "2"))))
+# ~35-45s of sung content per verse or chorus section is a reasonable rule
+# of thumb, so roughly (minutes*60/40) sections, kept to an even number
+# (verse/chorus pairs) and at least 4 (one verse + one chorus, twice).
+approx_sections = max(4, min(14, round((requested_minutes * 60 / 40) / 2) * 2))
 
 
 def _clean_json(raw: str) -> str:
@@ -67,20 +83,15 @@ PROMPT_INTRO = (
     "You are a professional songwriter for NEXT VIBE MUSIC, a channel of "
     "original AI-produced Afro-Reggae / Lovers Rock love songs.\n\n"
     "Write ONE original song for a music video. Return ONLY valid JSON, no "
-    "markdown fences, in this exact shape (all strings; lyrics_lines is an "
-    "array of short singable lines with NO section labels like [Chorus] "
-    "mixed into the text itself):\n\n"
+    "markdown fences, in this exact shape (all strings):\n\n"
     '{\n'
     '  "title": "a short catchy song title",\n'
-    '  "lyrics_lines": ["line one", "line two", "... 16 to 24 short singable lines covering verse/chorus/verse/chorus, each under 10 words"],\n'
+    '  "lyrics": "the full lyrics as ONE string, structured with section tags on their own line -- [Verse], [Chorus], and optionally [Bridge] -- with a BLANK LINE between each section, e.g. \\"[Verse]\\\\nline one\\\\nline two\\\\n\\\\n[Chorus]\\\\nline one\\\\nline two\\\\n\\\\n[Verse]\\\\n...\\". Keep each line short, warm and singable (under 10 words), no punctuation-heavy or awkward phrasing -- this goes straight into an AI singing model.",\n'
     '  "music_style_prompt": "one sentence describing the musical style/instrumentation for an AI music generator, e.g. warm Afro-Reggae with offbeat guitar skank, mellow bassline, African percussion, smooth romantic lead vocal",\n'
     '  "scene_queries": ["6 short (2-5 word) stock-photo search queries for real photos matching this song\'s story/mood, e.g. couple beach sunset, tropical palm trees, ocean waves sunset"],\n'
     '  "description": "a 2-3 sentence YouTube description for the video, mentioning it is an original AI-composed song",\n'
     '  "tags": ["8-12 relevant YouTube tags as short strings"]\n'
     '}\n\n'
-    "Keep every lyric line simple, warm and singable -- this goes straight "
-    "into an AI singing model, so avoid punctuation-heavy or awkward "
-    "phrasing.\n\n"
 )
 
 prompt = (
@@ -90,6 +101,10 @@ prompt = (
     + f'Mood: {mood}\n'
     + f'Language: {language}\n'
     + f'Visual style for the music video: {style}\n'
+    + f'Requested rough length: about {requested_minutes:.1f} minute(s) -- write approximately '
+    + f'{approx_sections} sections total (alternating [Verse] and [Chorus], repeating the chorus '
+    + 'lyrics where natural) to roughly match that length; a longer request means more sections, '
+    + 'not longer individual lines.\n'
 )
 
 
@@ -127,20 +142,31 @@ def fallback_song():
     set so this path isn't the normal case."""
     return {
         "title": title,
-        "lyrics_lines": [
-            "Under the island moon your hand is in mine",
-            "Your love is shining and everything feels fine",
-            "Sweet island loving come closer tonight",
-            "Dancing by the ocean everything feels right",
-            "Sweet island loving just you and me",
-            "Lost in the rhythm beside the sea",
-            "Palm trees are moving while the warm wind calls",
-            "Your love is stronger than any walls",
-            "Sweet island loving come closer tonight",
-            "Dancing by the ocean everything feels right",
-            "Hold me slowly let the rhythm play",
-            "We will keep dancing until the break of day",
-        ],
+        "lyrics": (
+            "[Verse]\n"
+            "Under the island moon your hand is in mine\n"
+            "Your love is shining and everything feels fine\n"
+            "Sweet island loving come closer tonight\n"
+            "Dancing by the ocean everything feels right\n"
+            "\n"
+            "[Chorus]\n"
+            "Sweet island loving just you and me\n"
+            "Lost in the rhythm beside the sea\n"
+            "Palm trees are moving while the warm wind calls\n"
+            "Your love is stronger than any walls\n"
+            "\n"
+            "[Verse]\n"
+            "Sweet island loving come closer tonight\n"
+            "Dancing by the ocean everything feels right\n"
+            "Hold me slowly let the rhythm play\n"
+            "We will keep dancing until the break of day\n"
+            "\n"
+            "[Chorus]\n"
+            "Sweet island loving just you and me\n"
+            "Lost in the rhythm beside the sea\n"
+            "Palm trees are moving while the warm wind calls\n"
+            "Your love is stronger than any walls"
+        ),
         "music_style_prompt": f"Afro-Reggae, {mood}, warm bass guitar, offbeat reggae guitar, African percussion, melodic lead vocal, polished studio production. No spoken intro.",
         "scene_queries": [
             "couple beach sunset",
@@ -155,41 +181,30 @@ def fallback_song():
     }
 
 
-def build_lrc(lines, duration_seconds):
-    """Evenly time-stamps plain lyric lines into DiffRhythm's required
-    "[mm:ss.xx]text" LRC format. This is a simple, fully local/deterministic
-    step -- no extra API call needed just to timestamp lines -- leaving only
-    ONE external call (the actual singing generation) as something that can
-    fail. Leaves a short intro/outro pad so the song doesn't start singing
-    at 0:00 or run vocals right to the last frame."""
-    lines = [l.strip() for l in lines if l.strip()]
-    if not lines:
-        lines = ["La la la"]
-    intro_pad = min(4.0, duration_seconds * 0.05)
-    outro_pad = min(6.0, duration_seconds * 0.08)
-    usable = max(10.0, duration_seconds - intro_pad - outro_pad)
-    per_line = usable / len(lines)
-
-    def fmt(t):
-        m = int(t // 60)
-        s = t - m * 60
-        return f"[{m:02d}:{s:05.2f}]"
-
-    out = []
-    t = intro_pad
-    for line in lines:
-        out.append(f"{fmt(t)}{line}")
-        t += per_line
-    return "\n".join(out)
+def _normalize_lyrics(raw: str) -> str:
+    """Defensive cleanup: make sure section tags are on their own line and
+    trim stray whitespace, in case Gemini's formatting drifts slightly from
+    what was asked for. Doesn't try to fully re-derive structure -- just
+    tidies what's there."""
+    text = (raw or "").strip()
+    if not text:
+        return text
+    # Make sure a tag like "[Verse]something" that landed glued to the next
+    # word gets split onto its own line.
+    text = re.sub(r"(\[(?:Verse|Chorus|Bridge)[^\]]*\])\s*", r"\1\n", text, flags=re.IGNORECASE)
+    lines = [l.rstrip() for l in text.splitlines()]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines)
 
 
 analyzed = analyze_with_gemini() or fallback_song()
 
 fallback = fallback_song()
-lyrics_lines = analyzed.get("lyrics_lines") or fallback["lyrics_lines"]
 final_title = analyzed.get("title") or title
-lrc = build_lrc(lyrics_lines, target_duration_seconds)
-plain_lyrics = "\n".join(lyrics_lines)
+lyrics = _normalize_lyrics(analyzed.get("lyrics")) or fallback["lyrics"]
 
 data = {
     "title": final_title,
@@ -197,9 +212,8 @@ data = {
     "mood": mood,
     "language": language,
     "video_style": style,
-    "lyrics": plain_lyrics,
-    "lrc": lrc,
-    "target_duration_seconds": target_duration_seconds,
+    "lyrics": lyrics,
+    "requested_duration_minutes": requested_minutes,
     "music_style_prompt": analyzed.get("music_style_prompt") or fallback["music_style_prompt"],
     "scene_queries": analyzed.get("scene_queries") or fallback["scene_queries"],
     "description": analyzed.get("description") or f"{final_title} - an original Afro-Reggae love song, AI-composed and produced for NEXT VIBE MUSIC.",
@@ -207,6 +221,5 @@ data = {
 }
 
 (OUT / "metadata.json").write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-(OUT / "lyrics.txt").write_text(plain_lyrics, encoding="utf-8")
-(OUT / "song.lrc").write_text(lrc, encoding="utf-8")
+(OUT / "lyrics.txt").write_text(lyrics, encoding="utf-8")
 print(f"Created metadata for: {final_title}")

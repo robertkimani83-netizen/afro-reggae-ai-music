@@ -29,7 +29,7 @@ on:
         default: 'African tropical island, cinematic, romantic, realistic'
         type: string
       duration:
-        description: 'Target duration in minutes (clamped to the AI singers supported range, 1.6-4.75 min)'
+        description: 'Roughly how many minutes the song should be (a guide for how many verse/chorus sections to write, 1-6 min -- not an exact guarantee)'
         required: true
         default: '2'
         type: string
@@ -97,7 +97,7 @@ jobs:
       - name: Generate lyrics and metadata
         run: python scripts/generate_metadata.py
 
-      - name: Generate full sung song (DiffRhythm, free HF Space)
+      - name: Generate full sung song (YuE2-3B, free HF Space)
         run: python scripts/generate_music.py
 
       - name: Fetch real photos for music-video scenes
