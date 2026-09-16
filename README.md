@@ -33,11 +33,13 @@ This rebuild fixes both:
   pipeline writes real scripts -- so every song is genuinely about what you
   typed in, not a fixed template.
 - **Singing now happens on Hugging Face's free "ZeroGPU" shared GPU pool**,
-  via the open-source [DiffRhythm](https://github.com/ASLP-lab/DiffRhythm)
-  model's public Space (`scripts/generate_music.py`). This machine (or the
+  via a public Space (`scripts/generate_music.py`). This machine (or the
   GitHub runner) never needs a GPU itself -- it just sends a request over
   the internet and gets a finished song back, the same pattern already used
-  for FLUX thumbnail backgrounds in `next-scene-news`.
+  for FLUX thumbnail backgrounds in `next-scene-news`. (Originally built
+  against DiffRhythm, then switched to YuE2-3B after DiffRhythm turned out
+  to have a standing server-side bug -- see "Free, and what 'free' depends
+  on" below.)
 - **Music-video scenes are now real photos from Pexels** (free stock photo
   API, same service the news channel already uses), instead of plain
   color-gradient cards.
@@ -47,9 +49,9 @@ This rebuild fixes both:
 
 ## One real limitation: English only, for now
 
-DiffRhythm's own lyrics tool only lists English and Chinese as supported
-languages -- there's no Swahili option, which strongly suggests the model
-wasn't trained on it. Feeding it Swahili lines would likely come out
+The singing model's own lyrics tools only list English (plus a few other
+languages depending on the model) -- no Swahili -- which strongly suggests
+it wasn't trained on it. Feeding it Swahili lines would likely come out
 mispronounced or garbled. So for now, songs are written and sung in English
 only, even though your channel's earlier videos mixed in Swahili phrases.
 Once this pipeline is proven working end-to-end, it's worth revisiting --
@@ -59,42 +61,53 @@ or looking at whether a better-suited free model exists by then.
 ## Complete pipeline
 
 1. Open GitHub Actions -> **Create Afro-Reggae Song** -> Run workflow.
-2. Enter a song title/theme/mood/visual style, and a target duration
-   (1.6-4.75 minutes -- DiffRhythm's supported range).
-3. Gemini writes real lyrics, a title, a music style description, six photo
-   search queries, a YouTube description and tags.
-4. The lyrics are time-stamped into the LRC format DiffRhythm needs.
-5. DiffRhythm (free HF Space) generates the actual sung song.
-6. Pexels supplies six real photos matching the song's story/mood.
-7. FFmpeg turns those photos into a slow Ken Burns-style video and mixes in
-   the song.
-8. A thumbnail is generated.
-9. YouTube upload is optional (off by default for testing).
-10. Everything generated is saved as a GitHub Actions artifact either way,
-    so you can review a run before ever enabling upload.
+2. Enter a song title/theme/mood/visual style, and a rough target duration
+   in minutes (a guide for how many verse/chorus sections Gemini writes,
+   not an exact guarantee -- the singing model decides the actual length
+   from how much lyrics it's given).
+3. Gemini writes real lyrics (structured with [Verse]/[Chorus]/[Bridge]
+   section tags), a title, a music style description, six photo search
+   queries, a YouTube description and tags.
+4. YuE2-3B (free HF Space) generates the actual sung song from those
+   lyrics.
+5. Pexels supplies six real photos matching the song's story/mood.
+6. FFmpeg turns those photos into a slow Ken Burns-style video, measures
+   the actual song length, and mixes the song in.
+7. A thumbnail is generated -- your NEXT VIBE MUSIC logo, the song title in
+   a bold display font, a genre tag, and an "ORIGINAL SONG" badge, over one
+   of the fetched photos.
+8. YouTube upload is optional (off by default for testing).
+9. Everything generated is saved as a GitHub Actions artifact either way,
+   so you can review a run before ever enabling upload.
 
 ## Free, and what "free" depends on
 
 No paid AI API is required:
 
 - Gemini: free tier (same key you already use for `next-scene-news`).
-- Singing: `generate_music.py` tries a short chain of free Hugging Face
-  ZeroGPU Spaces before giving up -- YuE2-3B with your HF_TOKEN, then
-  YuE2-3B anonymously, then DiffRhythm with your token, then DiffRhythm
-  anonymously. These are shared public resources, not Robert's dedicated
-  compute, so they can occasionally be slow, hit a shared usage limit
-  (Hugging Face's free ZeroGPU tier caps GPU-seconds per account per day,
-  shared across every free Space you call), or change their interface.
-  Trying anonymously as well as with your token, and trying a second Space,
-  covers most of that -- but if the whole chain ever fails in practice,
-  that's the point to reconsider a small paid vocal API (e.g. ElevenLabs'
-  official Music API, roughly $0.64/minute) as a last resort. Robert
-  explicitly chose to keep this free-only for now rather than add one --
-  see `scripts/generate_music.py`'s docstring for the full reasoning.
-  (Earlier drafts of this README mentioned "Suno's official API" as that
-  fallback -- that was wrong; Suno has no official public API, only
-  unofficial third-party resellers, which isn't something worth building
-  on.)
+- Singing: `generate_music.py` calls YuE2-3B (`mrfakename/yue2-3b`), a free
+  Hugging Face ZeroGPU Space. It's a shared public resource, not Robert's
+  dedicated compute, so it can occasionally be slow, change its interface,
+  or hit Hugging Face's free-tier daily quota (a cap on GPU-seconds per
+  account per day, shared across every free ZeroGPU Space called with the
+  same token). A run that fails with a quota message just needs to wait for
+  the reset time the error itself reports, then run again.
+  Two things were tried and ruled out as workarounds, based on real test
+  runs rather than assumption: an anonymous (no-token) retry, which turned
+  out to hit the exact same quota bucket as the token call rather than a
+  separate one; and falling back to a second free Space (DiffRhythm), which
+  turned out to have a standing server-side bug (`CUDA error: no kernel
+  image is available for execution on the device`) that failed identically
+  on two separate days of testing. Neither is worth the added complexity,
+  so the pipeline stays simple: one Space, fail fast and clearly on a
+  quota error, retry a couple of times on a genuinely transient one.
+  If Hugging Face's free tier ever proves too unreliable in practice, the
+  next thing to reconsider is a small paid vocal API (e.g. ElevenLabs'
+  official Music API, roughly $0.64/minute) as a real fallback -- Robert
+  has chosen to keep this fully free for now. (An earlier draft of this
+  README named "Suno's official API" for that role -- that was wrong; Suno
+  has no official public API, only unofficial third-party resellers, which
+  isn't something worth building on.)
 - Pexels: free tier stock photos (same key you already use for
   `next-scene-news`).
 - YouTube upload: free, standard YouTube Data API.

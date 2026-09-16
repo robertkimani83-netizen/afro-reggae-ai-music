@@ -21,9 +21,12 @@ New repository secret**
   `next-scene-news`'s thumbnail generator, otherwise create a free account
   at https://huggingface.co and generate a token (Settings -> Access
   Tokens -> a "read" token is enough).
-- This isn't strictly required (the DiffRhythm Space can be called
-  anonymously), but an authenticated call gets a bigger, steadier free
-  ZeroGPU quota than an anonymous one.
+- This isn't strictly required (the Space can be called anonymously), but
+  an authenticated call gets a bigger, steadier free ZeroGPU quota than an
+  anonymous one. Either way, this quota is a daily cap shared across every
+  free Hugging Face Space you use with this token -- if a run fails with a
+  quota-exceeded message, that's not a bug, just wait for the reset time
+  the error reports.
 
 ## 3. Pexels (real photos for the music video)
 
@@ -55,9 +58,10 @@ repo's YOUTUBE_* secrets here even if it's the same Google Cloud project.
 
 **GitHub -> this repo -> Actions -> Create Afro-Reggae Song -> Run workflow**
 
-Fill in a title, theme, mood, visual style, and a duration between 1.6 and
-4.75 minutes (DiffRhythm's supported range -- anything outside it gets
-clamped automatically). Leave "Upload to YouTube" unchecked for the first
+Fill in a title, theme, mood, visual style, and a rough duration in minutes
+(1-6 -- a guide for how many verse/chorus sections Gemini writes, not an
+exact guarantee; the singing model decides the actual song length from how
+much lyrics it's given). Leave "Upload to YouTube" unchecked for the first
 run.
 
 ## 6. Cost
