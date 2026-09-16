@@ -121,6 +121,23 @@ print(f"[music] requesting a song via {api_name} (seed {seed})", file=sys.stderr
 MAX_ATTEMPTS = 3
 RETRY_WAIT_SECONDS = 30
 
+
+def _is_quota_error(err) -> bool:
+    """Sept 16 2026: found the hard way -- Hugging Face's free ZeroGPU tier
+    gives each account a limited number of GPU-seconds PER DAY, shared
+    across every free ZeroGPU Space called with the same HF_TOKEN (so
+    DiffRhythm testing earlier today and this Space's testing draw from the
+    same daily pool). That error looks like:
+        "You have exceeded your free ZeroGPU quota (237s requested vs.
+        214s left). Try again in 15:47:48. Subscribe to Hugging Face PRO..."
+    It even tells you exactly how long until it resets -- which means
+    retrying 30 seconds later (the right move for a genuinely transient
+    server hiccup, like the CUDA error DiffRhythm hit) is pointless here
+    and just wastes 90 seconds before failing anyway. Detect it and fail
+    immediately with a clear message instead."""
+    return "zerogpu quota" in str(err).lower()
+
+
 result = None
 for attempt in range(1, MAX_ATTEMPTS + 1):
     try:
@@ -134,6 +151,17 @@ for attempt in range(1, MAX_ATTEMPTS + 1):
         )
         break
     except AppError as err:
+        if _is_quota_error(err):
+            raise RuntimeError(
+                f"Out of free Hugging Face ZeroGPU quota for today: {err}\n\n"
+                "This isn't a bug -- Hugging Face's free tier caps how many GPU-seconds "
+                "your account gets per day, shared across every free ZeroGPU Space you "
+                "call (so today's DiffRhythm testing and this Space's testing/runs all "
+                "drew from the same daily allowance). The message above tells you "
+                "exactly when it resets -- wait until then and re-run, or subscribe to "
+                "Hugging Face PRO for a bigger daily allowance if you want to test more "
+                "freely."
+            ) from err
         if attempt >= MAX_ATTEMPTS:
             raise RuntimeError(
                 f"YuE2-3B failed on the server side {MAX_ATTEMPTS} times in a row "
