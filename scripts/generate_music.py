@@ -113,10 +113,20 @@ print(f"[music] requesting a {duration_seconds:.0f}s song via {api_name}", file=
 # attempt. Real differences found: `current_prompt_type`, `edit` and
 # `edit_segments` aren't actually part of the callable API at all (they're
 # internal Gradio UI state, only used to switch which tab is visible -- not
-# passed to the inference function), and the duration parameter is the
-# lowercase `music_duration`, not `Music_Duration`. `ref_audio_path` is left
-# out entirely so it falls back to the Space's own default rather than
-# passing None into a filepath-typed input.
+# passed to the inference function). `ref_audio_path` is left out entirely
+# so it falls back to the Space's own default rather than passing None into
+# a filepath-typed input.
+#
+# Sept 16 2026 (second correction): every one of the fields above matched
+# fine and only the duration field was rejected as an unrecognized keyword,
+# even though gradio's own error message displayed it as lowercase
+# `music_duration`. gradio_client matches keywords against the underlying
+# Python function's actual parameter name, not the cleaned-up display text
+# in its error message -- and the real function signature (read directly
+# from the Space's source) declares it as `Music_Duration`, capital M. That
+# mismatch between what the error message shows and what it actually checks
+# against is the real lesson here: trust the source, not the pretty-printed
+# usage text, when the two disagree.
 result = client.predict(
     lrc=lrc,
     text_prompt=style_prompt,
@@ -127,7 +137,7 @@ result = client.predict(
     file_type="mp3",
     odeint_method="euler",
     preference_infer="quality first",
-    music_duration=duration_seconds,
+    Music_Duration=duration_seconds,
     api_name=api_name,
 )
 
