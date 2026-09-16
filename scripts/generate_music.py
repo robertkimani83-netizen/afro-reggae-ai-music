@@ -107,21 +107,27 @@ if endpoint_names and api_name not in endpoint_names:
 
 print(f"[music] requesting a {duration_seconds:.0f}s song via {api_name}", file=sys.stderr)
 
+# Sept 16 2026: the call below was corrected against the Space's REAL live
+# API error message (gradio_client prints the full parameter list when a
+# call fails), not just the app.py source reading that shaped the first
+# attempt. Real differences found: `current_prompt_type`, `edit` and
+# `edit_segments` aren't actually part of the callable API at all (they're
+# internal Gradio UI state, only used to switch which tab is visible -- not
+# passed to the inference function), and the duration parameter is the
+# lowercase `music_duration`, not `Music_Duration`. `ref_audio_path` is left
+# out entirely so it falls back to the Space's own default rather than
+# passing None into a filepath-typed input.
 result = client.predict(
     lrc=lrc,
-    ref_audio_path=None,
     text_prompt=style_prompt,
-    current_prompt_type="text",  # "text" (style-description) mode rather than "audio" (reference-clip) mode -- we have no reference audio
     seed=0,
     randomize_seed=True,
     steps=32,
     cfg_strength=4.0,
-    file_type="wav",
+    file_type="mp3",
     odeint_method="euler",
     preference_infer="quality first",
-    Music_Duration=duration_seconds,
-    edit=False,
-    edit_segments=None,
+    music_duration=duration_seconds,
     api_name=api_name,
 )
 
