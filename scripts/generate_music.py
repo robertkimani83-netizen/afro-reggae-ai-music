@@ -113,9 +113,7 @@ print(f"[music] requesting a {duration_seconds:.0f}s song via {api_name}", file=
 # attempt. Real differences found: `current_prompt_type`, `edit` and
 # `edit_segments` aren't actually part of the callable API at all (they're
 # internal Gradio UI state, only used to switch which tab is visible -- not
-# passed to the inference function). `ref_audio_path` is left out entirely
-# so it falls back to the Space's own default rather than passing None into
-# a filepath-typed input.
+# passed to the inference function).
 #
 # Sept 16 2026 (second correction): every one of the fields above matched
 # fine and only the duration field was rejected as an unrecognized keyword,
@@ -127,8 +125,18 @@ print(f"[music] requesting a {duration_seconds:.0f}s song via {api_name}", file=
 # mismatch between what the error message shows and what it actually checks
 # against is the real lesson here: trust the source, not the pretty-printed
 # usage text, when the two disagree.
+#
+# Sept 16 2026 (third correction): leaving `ref_audio_path` out entirely was
+# meant to fall back to the Space's default reference clip, but gradio_client
+# handles a file-typed default by trying to resolve/upload an already-cached
+# local copy of that default file -- which doesn't exist in a fresh GitHub
+# Actions runner, so it crashed with a FileNotFoundError before ever reaching
+# the server. Passing `None` explicitly avoids that client-side default-file
+# resolution altogether (we want text_prompt driving the style anyway, not a
+# generic reference clip).
 result = client.predict(
     lrc=lrc,
+    ref_audio_path=None,
     text_prompt=style_prompt,
     seed=0,
     randomize_seed=True,
