@@ -47,9 +47,11 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from gradio_client import Client
+from gradio_client.exceptions import AppError
 
 OUT = Path("output")
 OUT.mkdir(exist_ok=True)
@@ -134,20 +136,56 @@ print(f"[music] requesting a {duration_seconds:.0f}s song via {api_name}", file=
 # the server. Passing `None` explicitly avoids that client-side default-file
 # resolution altogether (we want text_prompt driving the style anyway, not a
 # generic reference clip).
-result = client.predict(
-    lrc=lrc,
-    ref_audio_path=None,
-    text_prompt=style_prompt,
-    seed=0,
-    randomize_seed=True,
-    steps=32,
-    cfg_strength=4.0,
-    file_type="mp3",
-    odeint_method="euler",
-    preference_infer="quality first",
-    Music_Duration=duration_seconds,
-    api_name=api_name,
-)
+#
+# Sept 16 2026 (fourth issue -- not a bug in this script): once all the
+# parameter/connection issues above were fixed, the call successfully
+# reached real model execution on Hugging Face's shared ZeroGPU pool and
+# failed there with `AppError: CUDA error: no kernel image is available
+# for execution on the device`. That's a server-side crash on the Space's
+# own GPU allocation, not anything wrong with what we're sending it --
+# ZeroGPU hands out GPUs from a shared pool on each call, and an
+# occasional bad/incompatible allocation for one call is a known class of
+# transient failure on that kind of infrastructure. So retry a few times
+# with a short wait before giving up, rather than failing the whole run
+# over what's likely a one-off bad GPU assignment.
+MAX_ATTEMPTS = 3
+RETRY_WAIT_SECONDS = 30
+
+result = None
+for attempt in range(1, MAX_ATTEMPTS + 1):
+    try:
+        result = client.predict(
+            lrc=lrc,
+            ref_audio_path=None,
+            text_prompt=style_prompt,
+            seed=0,
+            randomize_seed=True,
+            steps=32,
+            cfg_strength=4.0,
+            file_type="mp3",
+            odeint_method="euler",
+            preference_infer="quality first",
+            Music_Duration=duration_seconds,
+            api_name=api_name,
+        )
+        break
+    except AppError as err:
+        if attempt >= MAX_ATTEMPTS:
+            raise RuntimeError(
+                f"DiffRhythm failed on the server side {MAX_ATTEMPTS} times in a row "
+                f"(most recent error: {err}). This is happening on Hugging Face's own "
+                "shared ZeroGPU infrastructure, not in this script -- if it keeps "
+                "failing on later runs too, the free Space itself may be having a bad "
+                "day and it's worth trying again later, or reconsidering the paid "
+                "fallback mentioned in README.md."
+            ) from err
+        print(
+            f"[music] DiffRhythm returned a server-side error on attempt {attempt}/{MAX_ATTEMPTS} "
+            f"(likely a transient shared-GPU allocation issue): {err}\n"
+            f"[music] retrying in {RETRY_WAIT_SECONDS}s...",
+            file=sys.stderr,
+        )
+        time.sleep(RETRY_WAIT_SECONDS)
 
 # The Audio output component can come back as a plain filepath string, or as
 # a dict/tuple wrapping one, depending on gradio_client version -- handle
